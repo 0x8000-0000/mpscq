@@ -23,9 +23,9 @@ This implementation is based on several key insights:
   contention to the allocator, if all the nodes that transit the queue are
   dynamically allocated.
 
-* Thus custom allocators are needed, for managing the data elements as well as
-  the nodes. The allocators have allocate / release methods which can also
-  be implemented lock-free with the help of per-thread local pools.
+* However, a "release" after the consumer is done with the node back to the
+  thread that queued the message can be implemented with a simple "push"
+  operation.
 
 Prerequisites
 =============

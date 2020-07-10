@@ -25,6 +25,8 @@
 
 #include <atomic>
 #include <cstdlib>
+#include <list>
+#include <memory>
 #include <vector>
 
 namespace sbit
@@ -35,24 +37,25 @@ namespace mpscq
 class Queue
 {
 public:
-   /** Metadata for object pushed into the queue
-    */
-   struct Node
+   struct Envelope
    {
-      /// Pointer to user data
-      void* ptr;
-
       /// Next element in the queue
-      Node* next;
+      Envelope* next;
 
-      /// What thread group uses this node
-      uintptr_t affinity;
-
-      /// Used to pad the node to 128 bytes to avoid false sharing between nodes
-      uintptr_t padding;
+      /// Where to return the node after the message is processed
+      std::atomic<Envelope*>* returnHead;
    };
 
-   void append(Node* elem)
+   template <typename Payload>
+   struct Message
+   {
+      Envelope envelope;
+
+      /// The payload
+      Payload payload;
+   };
+
+   void append(Envelope* elem)
    {
       elem->next = m_head.load(std::memory_order_relaxed);
 
@@ -63,9 +66,9 @@ public:
       }
    }
 
-   Node* flushAll()
+   Envelope* flushAll()
    {
-      Node* values = std::atomic_exchange_explicit(&m_head, nullptr, std::memory_order_release);
+      Envelope* values = std::atomic_exchange_explicit(&m_head, nullptr, std::memory_order_release);
 
       // TODO(florin): reverse the links so we return a pointer to the oldest element
 
@@ -73,47 +76,37 @@ public:
    }
 
 private:
-   std::atomic<Node*> m_head;
+   std::atomic<Envelope*> m_head;
+};
+
+template <typename Payload>
+class MessagePool
+{
+public:
+   using Envelope = Queue::Envelope;
+   using Message  = Queue::Message<Payload>;
+
+   MessagePool(size_t allocationGroupSize, std::pmr::memory_resource* memoryResource) :
+      m_pool{allocationGroupSize, memoryResource}
+   {
+   }
+
+   /** Allocates a message
+    *
+    * @return a pointer to the message
+    */
+   Message* allocate();
+
+private:
+   std::atomic<Envelope*> m_recycleHead;
+
+   Message* m_freeMessages = nullptr;
+
+   std::list<std::vector<Message>> m_pool;
 };
 
 } // namespace mpscq
 
-/** Lock-free object pool
- *
- */
-class NodePool
-{
-public:
-   NodePool(size_t threadCount, size_t poolSize);
-
-   /** Allocates some nodes
-    *
-    * @param affinity Indicates what thread will use this node
-    * @param maxCount Specifies the maximum desired number of allocated nodes
-    * @return a pointer to the head node
-    */
-   mpscq::Queue::Node* allocate(uintptr_t affinity, size_t maxCount);
-
-   /** Recycles a node list
-    *
-    * @param node Points to the head of the node list
-    */
-   void recycle(mpscq::Queue::Node* node);
-
-private:
-   struct ThreadStatistics
-   {
-      sbit::Stats requestSizes;
-   };
-
-   std::vector<mpscq::Queue::Node> m_nodePool;
-
-   std::atomic<mpscq::Queue::Node*> m_globalFreeHead;
-
-   std::vector<std::atomic<mpscq::Queue::Node*>> m_threadNodePool;
-
-   std::vector<ThreadStatistics> m_statistics;
-};
 } // namespace sbit
 
 #endif // SBIT_MPSC_H_INCLUDED
