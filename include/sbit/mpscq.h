@@ -143,6 +143,54 @@ private:
    std::pmr::list<std::pmr::vector<Message>> m_pool;
 };
 
+class Processor
+{
+public:
+   explicit Processor(Queue& queue) : m_queue(queue)
+   {
+   }
+
+   virtual void processElement(Queue::Envelope* envelope) = 0;
+
+   virtual void afterBatch() = 0;
+
+   virtual void onIdle() = 0;
+
+   void process()
+   {
+      while (!m_done.load(std::memory_order_acquire))
+      {
+         auto* envelope = m_queue.flushAll();
+
+         if (envelope == nullptr)
+         {
+            onIdle();
+            continue;
+         }
+
+         while (envelope != nullptr)
+         {
+            processElement(envelope);
+
+            auto* next = envelope->next;
+            envelope->recycle();
+            envelope = next;
+         }
+
+         afterBatch();
+      }
+   }
+
+   void interrupt()
+   {
+      m_done.store(true, std::memory_order_release);
+   }
+
+private:
+   Queue&            m_queue;
+   std::atomic<bool> m_done{false};
+};
+
 } // namespace mpscq
 
 } // namespace sbit

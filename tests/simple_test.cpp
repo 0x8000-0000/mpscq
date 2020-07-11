@@ -34,60 +34,91 @@ struct Data
 
 class Sender
 {
-   public:
+public:
+   Sender()
+   {
+   }
 
-      Sender()
+   void sendNumbers(size_t count, sbit::mpscq::Queue& queue)
+   {
+      for (size_t ii = 0; ii < count; ++ii)
       {
+         auto msg           = m_pool.allocate();
+         msg->payload.value = ii;
+         queue.append(&msg->envelope);
       }
+   }
 
-      void sendNumbers(size_t count, sbit::mpscq::Queue& queue)
-      {
-         for (size_t ii = 0; ii < count; ++ ii)
-         {
-            auto msg = m_pool.allocate();
-            msg->payload.value = ii;
-            queue.append(&msg->envelope);
-         }
-      }
+private:
+   std::array<char, 1024> m_dataBucket = {};
 
-   private:
-      std::array<char, 1024> m_dataBucket = {};
+   std::pmr::monotonic_buffer_resource m_resource{m_dataBucket.data(), m_dataBucket.size()};
 
-      std::pmr::monotonic_buffer_resource m_resource{m_dataBucket.data(), m_dataBucket.size()};
-
-      sbit::mpscq::MessagePool<Data> m_pool{8, &m_resource};
+   sbit::mpscq::MessagePool<Data> m_pool{8, &m_resource};
 };
 
 class Receiver
 {
-   public:
+public:
+   void receive(sbit::mpscq::Queue& queue)
+   {
+      auto* envelope = queue.flushAll();
 
-      void receive(sbit::mpscq::Queue& queue)
+      while (envelope != nullptr)
       {
-         auto* envelope = queue.flushAll();
+         auto* next = envelope->next;
 
-         while (envelope != nullptr)
-         {
-            auto* next = envelope->next;
+         auto* message = reinterpret_cast<sbit::mpscq::Queue::Message<Data>*>(envelope);
 
-            auto* message = reinterpret_cast<sbit::mpscq::Queue::Message<Data>*>(envelope);
+         m_sum += message->payload.value;
 
-            m_sum += message->payload.value;
+         envelope->recycle();
 
-            envelope->recycle();
-
-            envelope = next;
-         }
+         envelope = next;
       }
+   }
 
-      int getSum() const noexcept
-      {
-         return m_sum;
-      }
+   int getSum() const noexcept
+   {
+      return m_sum;
+   }
 
-   private:
+private:
+   int m_sum = 0;
+};
 
-      int m_sum = 0;
+class IntegerSummer : public sbit::mpscq::Processor
+{
+public:
+   explicit IntegerSummer(sbit::mpscq::Queue& queue) : Processor{queue}
+   {
+   }
+
+   int getSum() const noexcept
+   {
+      return m_sum;
+   }
+
+protected:
+   void processElement(sbit::mpscq::Queue::Envelope* envelope) override
+   {
+      auto* message = reinterpret_cast<sbit::mpscq::Queue::Message<Data>*>(envelope);
+
+      m_sum += message->payload.value;
+   }
+
+   void afterBatch() override
+   {
+      interrupt();
+   }
+
+   void onIdle() override
+   {
+      // do nothing
+   }
+
+private:
+   int m_sum = 0;
 };
 } // anonymous namespace
 
@@ -95,11 +126,24 @@ TEST(SimpleTest, SendReceive)
 {
    sbit::mpscq::Queue queue;
 
-   Sender sender;
+   Sender   sender;
    Receiver receiver;
 
    sender.sendNumbers(5, queue);
    receiver.receive(queue);
+
+   ASSERT_EQ(10, receiver.getSum());
+}
+
+TEST(SimpleTest, UseProcessor)
+{
+   sbit::mpscq::Queue queue;
+
+   Sender        sender;
+   IntegerSummer receiver{queue};
+
+   sender.sendNumbers(5, queue);
+   receiver.process();
 
    ASSERT_EQ(10, receiver.getSum());
 }
