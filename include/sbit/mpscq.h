@@ -143,20 +143,27 @@ private:
    std::pmr::list<std::pmr::vector<Message>> m_pool;
 };
 
-class Processor
+class ProcessorBase
 {
 public:
-   explicit Processor(Queue& queue) : m_queue(queue)
+   explicit ProcessorBase(Queue& queue) : m_queue(queue)
    {
    }
 
+   virtual ~ProcessorBase() = default;
+
    virtual void processElement(Queue::Envelope* envelope) = 0;
 
-   virtual void afterBatch() = 0;
+   virtual void afterBatch()
+   {
+      // do nothing
+   }
 
-   virtual void onIdle() = 0;
+   virtual void onIdle()
+   { // do nothing
+   }
 
-   void process()
+   void startProcessing()
    {
       while (!m_done.load(std::memory_order_acquire))
       {
@@ -189,6 +196,26 @@ public:
 private:
    Queue&            m_queue;
    std::atomic<bool> m_done{false};
+};
+
+template <typename Payload>
+class Processor : public ProcessorBase
+{
+public:
+   explicit Processor(Queue& queue) : ProcessorBase(queue)
+   {
+   }
+
+protected:
+   using Message = Queue::Message<Payload>;
+
+   virtual void process(const Payload& payload) = 0;
+
+   void processElement(Queue::Envelope* envelope) override
+   {
+      auto* message = reinterpret_cast<Message*>(envelope);
+      process(message->payload);
+   }
 };
 
 } // namespace mpscq

@@ -87,7 +87,7 @@ private:
    int m_sum = 0;
 };
 
-class IntegerSummer : public sbit::mpscq::Processor
+class IntegerSummer : public sbit::mpscq::Processor<Data>
 {
 public:
    explicit IntegerSummer(sbit::mpscq::Queue& queue) : Processor{queue}
@@ -100,21 +100,14 @@ public:
    }
 
 protected:
-   void processElement(sbit::mpscq::Queue::Envelope* envelope) override
+   void process(const Data& data) override
    {
-      auto* message = reinterpret_cast<sbit::mpscq::Queue::Message<Data>*>(envelope);
-
-      m_sum += message->payload.value;
+      m_sum += data.value;
    }
 
    void afterBatch() override
    {
       interrupt();
-   }
-
-   void onIdle() override
-   {
-      // do nothing
    }
 
 private:
@@ -143,7 +136,7 @@ TEST(SimpleTest, UseProcessor)
    IntegerSummer receiver{queue};
 
    sender.sendNumbers(5, queue);
-   receiver.process();
+   receiver.startProcessing();
 
    ASSERT_EQ(10, receiver.getSum());
 }
