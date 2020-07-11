@@ -1,4 +1,5 @@
 build/
 .clangd/
 .idea/
+cmake-build-*
 compile_commands.json

@@ -16,9 +16,11 @@ if (NOT MSVC)
    target_compile_options (project_warnings INTERFACE -Wall -Wextra -Werror -pedantic)
 endif ()
 
-add_library (sbit_mpscq src/mpscq_pool.cpp)
-target_include_directories (sbit_mpscq PUBLIC include)
-target_link_libraries (sbit_mpscq PUBLIC project_options)
-target_link_libraries (sbit_mpscq PRIVATE project_warnings)
+add_library (sbit_mpscq INTERFACE)
+target_include_directories (sbit_mpscq INTERFACE include)
+target_link_libraries (sbit_mpscq INTERFACE project_options)
 
-#add_subdirectory (tests)
+include (GoogleTest)
+enable_testing ()
+
+add_subdirectory (tests)

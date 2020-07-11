@@ -19,15 +19,3 @@
  */
 
 #include <sbit/mpscq.h>
-
-sbit::NodePool::NodePool(size_t threadCount, size_t poolSize)
-{
-}
-
-sbit::Queue::Node* sbit::NodePool::allocate(uintptr_t affinity, size_t maxCount)
-{
-}
-
-void sbit::NodePool::recycle(sbit::Queue::Node* node)
-{
-}

@@ -24,9 +24,9 @@
 #include <sbit/stats.h>
 
 #include <atomic>
-#include <cstdlib>
+#include <cstddef>
 #include <list>
-#include <memory>
+#include <memory_resource>
 #include <vector>
 
 namespace sbit
@@ -44,6 +44,22 @@ public:
 
       /// Where to return the node after the message is processed
       std::atomic<Envelope*>* returnHead;
+
+      void appendTo(std::atomic<Envelope*>* head)
+      {
+         next = head->load(std::memory_order_relaxed);
+
+         while (!std::atomic_compare_exchange_weak_explicit(
+            head, &next, this, std::memory_order_release, std::memory_order_relaxed))
+         {
+            // the body of the loop is empty
+         }
+      }
+
+      void recycle()
+      {
+         appendTo(returnHead);
+      }
    };
 
    template <typename Payload>
@@ -53,17 +69,16 @@ public:
 
       /// The payload
       Payload payload;
+
+      void recycle()
+      {
+         envelope.recycle();
+      }
    };
 
    void append(Envelope* elem)
    {
-      elem->next = m_head.load(std::memory_order_relaxed);
-
-      while (!std::atomic_compare_exchange_weak_explicit(
-         &m_head, &elem->next, elem, std::memory_order_release, std::memory_order_relaxed))
-      {
-         // the body of the loop is empty
-      }
+      elem->appendTo(&m_head);
    }
 
    Envelope* flushAll()
@@ -76,7 +91,7 @@ public:
    }
 
 private:
-   std::atomic<Envelope*> m_head;
+   std::atomic<Envelope*> m_head{nullptr};
 };
 
 template <typename Payload>
@@ -87,7 +102,7 @@ public:
    using Message  = Queue::Message<Payload>;
 
    MessagePool(size_t allocationGroupSize, std::pmr::memory_resource* memoryResource) :
-      m_pool{allocationGroupSize, memoryResource}
+      m_allocationGroupSize{allocationGroupSize}, m_recycleHead{nullptr}, m_pool{allocationGroupSize, memoryResource}
    {
    }
 
@@ -95,14 +110,37 @@ public:
     *
     * @return a pointer to the message
     */
-   Message* allocate();
+   Message* allocate()
+   {
+      if (m_freeMessages == nullptr)
+      {
+         m_freeMessages = std::atomic_exchange_explicit(&m_recycleHead, nullptr, std::memory_order_release);
+      }
+
+      if (m_freeMessages == nullptr)
+      {
+         auto& elems = m_pool.emplace_back(std::pmr::vector<Message>{m_allocationGroupSize, m_pool.get_allocator()});
+         for (auto& msg : elems)
+         {
+            msg.envelope.next       = m_freeMessages;
+            m_freeMessages          = &msg.envelope;
+            msg.envelope.returnHead = &m_recycleHead;
+         }
+      }
+
+      auto* msg      = reinterpret_cast<Message*>(m_freeMessages);
+      m_freeMessages = m_freeMessages->next;
+      return msg;
+   }
 
 private:
+   const size_t m_allocationGroupSize;
+
    std::atomic<Envelope*> m_recycleHead;
 
-   Message* m_freeMessages = nullptr;
+   Envelope* m_freeMessages = nullptr;
 
-   std::list<std::vector<Message>> m_pool;
+   std::pmr::list<std::pmr::vector<Message>> m_pool;
 };
 
 } // namespace mpscq
