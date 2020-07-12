@@ -36,6 +36,10 @@ using namespace std::chrono_literals;
 namespace
 {
 
+const auto performWrites          = true;
+const auto processorIdlePeriod    = 0ms;
+const auto generatorCoolOffPeriod = 32ms;
+
 struct LogEntry
 {
    uint64_t         timestamp;
@@ -48,24 +52,41 @@ struct LogEntry
 class LoggerSink final : public sbit::mpscq::Processor<LogEntry>
 {
 public:
-   explicit LoggerSink(sbit::mpscq::Queue& queue, std::ostream& os) : Processor{queue}, m_os{os}
+   explicit LoggerSink(sbit::mpscq::Queue& queue, std::ostream& os) : Processor{queue}, m_os{os}, m_messageCount{0}
    {
+   }
+
+   virtual ~LoggerSink()
+   {
+      m_os << "Observed " << m_messageCount << " messages.\n";
    }
 
 protected:
    void process(const LogEntry& entry) override
    {
+      ++m_messageCount;
       const std::string_view text{entry.message.data(), entry.messageLength};
-      m_os << entry.timestamp << ':' << entry.source << ':' << text << '\n';
+      if (performWrites)
+      {
+         m_os << entry.timestamp << ':' << entry.source << ':' << text << '\n';
+      }
    }
 
    void onIdle() override
    {
-      std::this_thread::sleep_for(20ms);
+      if (processorIdlePeriod.count() > 0)
+      {
+         std::this_thread::sleep_for(processorIdlePeriod);
+      }
+      else
+      {
+         std::this_thread::yield();
+      }
    }
 
 private:
    std::ostream& m_os;
+   size_t        m_messageCount;
 };
 
 void consumerThread(LoggerSink& sink)
@@ -103,7 +124,7 @@ void producerThread(std::atomic<bool>& done, sbit::mpscq::Queue& queue)
       if (msg == nullptr)
       {
          // pool exhausted
-         std::this_thread::sleep_for(30ms);
+         std::this_thread::sleep_for(generatorCoolOffPeriod);
          poolExhausted++;
          continue;
       }
