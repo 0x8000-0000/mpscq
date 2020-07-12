@@ -119,12 +119,20 @@ public:
 
       if (m_freeMessages == nullptr)
       {
-         auto& elems = m_pool.emplace_back(std::pmr::vector<Message>{m_allocationGroupSize, m_pool.get_allocator()});
-         for (auto& msg : elems)
+         try
          {
-            msg.envelope.next       = m_freeMessages;
-            m_freeMessages          = &msg.envelope;
-            msg.envelope.returnHead = &m_recycleHead;
+            auto& elems =
+               m_pool.emplace_back(std::pmr::vector<Message>{m_allocationGroupSize, m_pool.get_allocator()});
+            for (auto& msg : elems)
+            {
+               msg.envelope.next       = m_freeMessages;
+               m_freeMessages          = &msg.envelope;
+               msg.envelope.returnHead = &m_recycleHead;
+            }
+         }
+         catch (...)
+         {
+            return nullptr;
          }
       }
 

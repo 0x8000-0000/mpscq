@@ -21,11 +21,17 @@
 #include <sbit/mpscq.h>
 
 #include <fmt/format.h>
+#include <fmt/ostream.h>
 
 #include <array>
+#include <chrono>
 #include <fstream>
 #include <memory_resource>
+#include <random>
 #include <string_view>
+#include <thread>
+
+using namespace std::chrono_literals;
 
 namespace
 {
@@ -53,33 +59,128 @@ protected:
       m_os << entry.timestamp << ':' << entry.source << ':' << text << '\n';
    }
 
-   void afterBatch() override
-   {
-      interrupt();
-   }
-
    void onIdle() override
    {
-      // do nothing
+      std::this_thread::sleep_for(20ms);
    }
 
 private:
    std::ostream& m_os;
 };
+
+void consumerThread(LoggerSink& sink)
+{
+   sink.startProcessing();
+}
+
+void producerThread(std::atomic<bool>& done, sbit::mpscq::Queue& queue)
+{
+   std::vector<char>                   dataBucket(/* __n = */ 16384, /* __v = */ 0);
+   std::pmr::monotonic_buffer_resource resource{
+      dataBucket.data(), dataBucket.size(), std::pmr::null_memory_resource()};
+   sbit::mpscq::MessagePool<LogEntry> pool{8, &resource};
+
+   const std::string threadId = fmt::format("Thread-{}", std::this_thread::get_id());
+
+   std::random_device        rd;
+   std::mt19937::result_type seed =
+      rd() ^ ((std::mt19937::result_type)std::chrono::duration_cast<std::chrono::seconds>(
+                 std::chrono::system_clock::now().time_since_epoch())
+                 .count() +
+              (std::mt19937::result_type)std::chrono::duration_cast<std::chrono::microseconds>(
+                 std::chrono::high_resolution_clock::now().time_since_epoch())
+                 .count());
+
+   std::mt19937                            gen(seed);
+   std::uniform_int_distribution<unsigned> distrib(0, 1024);
+
+   size_t poolExhausted   = 0;
+   size_t messgeAvailable = 0;
+
+   while (!done.load(std::memory_order_acquire))
+   {
+      auto msg = pool.allocate();
+      if (msg == nullptr)
+      {
+         // pool exhausted
+         std::this_thread::sleep_for(30ms);
+         poolExhausted++;
+         continue;
+      }
+
+      messgeAvailable++;
+
+      const std::chrono::time_point<std::chrono::system_clock> now      = std::chrono::system_clock::now();
+      const auto                                               duration = now.time_since_epoch();
+
+      msg->payload.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+      msg->payload.source    = threadId;
+
+      const unsigned value = distrib(gen);
+
+      const auto len =
+         fmt::format_to_n(msg->payload.message.data(), msg->payload.message.size(), "The lucky number is {}", value);
+      msg->payload.messageLength = len.size;
+
+      queue.append(&msg->envelope);
+   }
+
+   fmt::print("For {}, message available: {}, pool exhausted {}\n", threadId, messgeAvailable, poolExhausted);
+}
+
 } // anonymous namespace
 
 int main(int argc, char* argv[])
 {
    if (argc < 2)
    {
-      fmt::print("Thread count and output file arguments are required.");
+      fmt::print("Thread count and output file arguments are required.\n");
+      return 1;
+   }
+
+   const auto threadCount = std::stoi(argv[1]);
+   if ((threadCount < 1) || (threadCount > 512))
+   {
+      fmt::print("Invalid thread count: {} (converted to {})\n", argv[1], threadCount);
       return 1;
    }
 
    sbit::mpscq::Queue queue;
 
-   std::ofstream out{argv[1]};
-   LoggerSink    sink(queue, out);
+   std::ofstream out{argv[2]};
+   LoggerSink    sink{queue, out};
+   std::thread   sinkThread{consumerThread, std::ref(sink)};
+
+   std::atomic<bool> doneFlag{false};
+
+   std::vector<std::thread> producerThreads;
+   producerThreads.reserve(threadCount);
+   for (int ii = 0; ii < threadCount; ++ii)
+   {
+      producerThreads.emplace_back(producerThread, std::ref(doneFlag), std::ref(queue));
+   }
+
+   const int testTime = 30;
+
+   fmt::print("Counting down {} seconds\n", testTime);
+
+   for (int ii = 0; ii < testTime; ++ii)
+   {
+      std::this_thread::sleep_for(1s);
+   }
+
+   fmt::print("Stimulus complete. Shutting down...\n");
+
+   sink.interrupt();
+   doneFlag.store(true, std::memory_order_release);
+
+   sinkThread.join();
+   for (auto& tt : producerThreads)
+   {
+      tt.join();
+   }
+
+   fmt::print("Test complete.\n");
 
    return 0;
 }

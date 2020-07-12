@@ -23,4 +23,7 @@ target_link_libraries (sbit_mpscq INTERFACE project_options)
 include (GoogleTest)
 enable_testing ()
 
+set (THREADS_PREFER_PTHREAD_FLAG ON)
+find_package (Threads REQUIRED)
+
 add_subdirectory (tests)
