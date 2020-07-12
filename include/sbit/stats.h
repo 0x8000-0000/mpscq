@@ -26,6 +26,13 @@
 namespace sbit
 {
 
+/** \addtogroup statistics
+ *
+ * Statistics utilities
+ *
+ * @{
+ */
+
 /** Maintain running statistics for a data stream
  *
  * Implementation adapted from:
@@ -45,11 +52,17 @@ namespace sbit
 class Stats
 {
 public:
+   /** Resets the statistics so the object can be reused
+    */
    void reset() noexcept
    {
       m_count = 0;
    }
 
+   /** Observe a new value and mix it in the statistics
+    *
+    * @param value is the value that was observed
+    */
    void observe(double value) noexcept
    {
       ++m_count;
@@ -68,16 +81,22 @@ public:
       }
    }
 
+   /** @return the number of observations
+    */
    size_t getCount() const noexcept
    {
       return m_count;
    }
 
+   /** @return the arithmetic mean statistic of the observations
+    */
    double getMean() const noexcept
    {
       return m_mean;
    }
 
+   /** @return the variance statistic of the observations
+    */
    double getVariance() const noexcept
    {
       if (m_count > 1)
@@ -94,6 +113,8 @@ private:
    double m_mean     = 0.0;
    double m_variance = 0.0;
 };
+
+/** @}*/
 
 } // namespace sbit
 
