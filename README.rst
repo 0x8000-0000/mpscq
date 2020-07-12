@@ -34,6 +34,11 @@ A C++17 conforming compiler. Tested with GCC9/10 and Clang10 on Linux.
 
 Conan package manager (mainly required for Google Test at this point.)
 
+Documentation
+=============
+
+`Generated Doxygen documentation <https://0x8000-0000.github.io/mpscq/>`_
+
 License
 =======
 
