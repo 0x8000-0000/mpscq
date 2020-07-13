@@ -51,27 +51,53 @@ class Queue
 public:
    /** Header/metadata for a message
     */
-   struct Envelope
+   class Envelope
    {
-      /// Next element in the queue
-      Envelope* next;
+   public:
+      /** Chains the next envelope to this one
+       *
+       * @param next Is the next envelope in the unsynchronized list
+       */
+      void setNext(Envelope* next) noexcept
+      {
+         m_next = next;
+      }
 
-      /// Where to return the object after the message is processed
-      std::atomic<Envelope*>* workerPool;
+      /** @return the next element in the free list
+       */
+      Envelope* getNext() const noexcept
+      {
+         return m_next;
+      }
 
-      /// Where to return the object when the worker is shut down
-      std::atomic<Envelope*>* ownerPool;
+      /** Sets the worker pool that currently owns this envelope
+       *
+       * @param poolMailbox Points to the mailbox for the pool
+       */
+      void setWorkerPool(std::atomic<Envelope*>* poolMailbox)
+      {
+         m_workerPool = poolMailbox;
+      }
+
+      /** Sets the pool that physically owns this envelope
+       *
+       * @param poolMailbox Points to the mailbox for the pool
+       */
+      void setOwnerPool(std::atomic<Envelope*>* poolMailbox)
+      {
+         m_ownerPool = poolMailbox;
+      }
 
       /** Atomically appends this element to the specified queue
        *
-       * @param head is the head of the queue
+       * @param poolMailbox is the head of the queue
        */
-      void appendTo(std::atomic<Envelope*>* head)
+      void appendTo(std::atomic<Envelope*>* poolMailbox) noexcept
       {
-         next = head->load(std::memory_order_relaxed);
+         m_next = poolMailbox->load(std::memory_order_relaxed);
 
          while (!std::atomic_compare_exchange_weak_explicit(
-            head, &next, this, std::memory_order_release, std::memory_order_relaxed))
+            poolMailbox, &m_next, this, std::memory_order_release, std::memory_order_relaxed))
          {
             // the body of the loop is empty
          }
@@ -79,31 +105,46 @@ public:
 
       /** Recycles this element by returning it to its worker pool
        */
-      void recycle()
+      void recycle() noexcept
       {
-         appendTo(workerPool);
+         appendTo(m_workerPool);
       }
-   };
 
-   /** Aggregation of a payload and an envelope
-    *
-    * @tparam Payload Is the type of the useful payload processed via the queue
-    */
-   template <typename Payload>
-   struct Message
-   {
-      /// The envelope
-      Envelope envelope;
-
-      /// The payload
-      Payload payload;
-
-      /** Recycles this element by returning it to its worker pool
+      /** Releases this element by returning it to its owner pool
        */
-      void recycle()
+      void release() noexcept
       {
-         envelope.recycle();
+         appendTo(m_ownerPool);
       }
+
+      /** Sets the payload for this message
+       *
+       * @param payload Is a pointer to the useful data
+       */
+      void setPayload(void* payload) noexcept
+      {
+         m_payload = payload;
+      }
+
+      /** @return the payload of the message
+       */
+      void* getPayload() const noexcept
+      {
+         return m_payload;
+      }
+
+   private:
+      /// Next element in the queue
+      Envelope* m_next;
+
+      /// Where to return the object after the message is processed
+      std::atomic<Envelope*>* m_workerPool;
+
+      /// Where to return the object when the worker is shut down
+      std::atomic<Envelope*>* m_ownerPool;
+
+      /// The payload wrapped in this envelope
+      void* m_payload;
    };
 
    /** Appends this object to the queue
@@ -142,9 +183,28 @@ template <typename Payload>
 class MessagePool
 {
    using Envelope = Queue::Envelope;
-   using Message  = Queue::Message<Payload>;
 
 public:
+   /** Aggregation of a payload and an envelope
+    *
+    * @tparam Payload Is the type of the useful payload processed via the queue
+    */
+   struct Message
+   {
+      /// The envelope
+      Envelope envelope;
+
+      /// The payload
+      Payload payload;
+
+      /** Recycles this element by returning it to its worker pool
+       */
+      void recycle()
+      {
+         envelope.recycle();
+      }
+   };
+
    /** Constructs a message pool
     *
     * @param allocationGroupSize Specifies how many objects to allocate at once
@@ -176,10 +236,11 @@ public:
                std::pmr::vector<Message>{m_allocationGroupSize, m_objectPool.get_allocator()});
             for (auto& msg : elems)
             {
-               msg.envelope.next       = m_readyPool;
-               m_readyPool             = &msg.envelope;
-               msg.envelope.workerPool = &m_recyclePool;
-               msg.envelope.ownerPool  = &m_recyclePool;
+               msg.envelope.setNext(m_readyPool);
+               m_readyPool = &msg.envelope;
+               msg.envelope.setWorkerPool(&m_recyclePool);
+               msg.envelope.setOwnerPool(&m_recyclePool);
+               msg.envelope.setPayload(&msg.payload);
             }
          }
          catch (...)
@@ -189,7 +250,7 @@ public:
       }
 
       auto* msg   = reinterpret_cast<Message*>(m_readyPool);
-      m_readyPool = m_readyPool->next;
+      m_readyPool = m_readyPool->getNext();
       return msg;
    }
 
@@ -266,7 +327,7 @@ public:
          {
             processElement(envelope);
 
-            auto* next = envelope->next;
+            auto* next = envelope->getNext();
             envelope->recycle();
             envelope = next;
          }
@@ -322,12 +383,12 @@ protected:
    virtual void process(const Payload& payload) = 0;
 
 private:
-   using Message = Queue::Message<Payload>;
+   using Message = typename MessagePool<Payload>::Message;
 
    void processElement(Queue::Envelope* envelope) override
    {
-      auto* message = reinterpret_cast<Message*>(envelope);
-      process(message->payload);
+      auto* payload = static_cast<Payload*>(envelope->getPayload());
+      process(*payload);
    }
 };
 

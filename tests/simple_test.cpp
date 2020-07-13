@@ -66,11 +66,11 @@ public:
 
       while (envelope != nullptr)
       {
-         auto* next = envelope->next;
+         auto* next = envelope->getNext();
 
-         auto* message = reinterpret_cast<sbit::mpscq::Queue::Message<Data>*>(envelope);
+         auto* payload = static_cast<Data*>(envelope->getPayload());
 
-         m_sum += message->payload.value;
+         m_sum += payload->value;
 
          envelope->recycle();
 
