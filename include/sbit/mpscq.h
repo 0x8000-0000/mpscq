@@ -169,6 +169,91 @@ public:
       return values;
    }
 
+   /** Base class encapsulating the event loop of a consumer or processor
+    */
+   class Processor
+   {
+   public:
+      /** Constructs a processor that consumes elements from a queue
+       *
+       * @param queue Is the queue from which elements are consumed
+       */
+      explicit Processor(Queue& queue) : m_queue(queue)
+      {
+      }
+
+      /** Called for each element popped from the queue
+       *
+       * @param envelope Points to the element to be processed
+       * @return nothing
+       */
+      virtual void processElement(Queue::Envelope* envelope) = 0;
+
+      /** Called after each batch of elements is processed
+       *
+       * @return nothing
+       */
+      virtual void afterBatch()
+      {
+         // do nothing
+      }
+
+      /** Called when a new batch was requested, but no new elements were available
+       *
+       * @return nothing
+       */
+      virtual void onIdle()
+      {
+         // do nothing
+      }
+
+      /** Begin the "infinite" event loop
+       */
+      void startProcessing()
+      {
+         while (!m_done.load(std::memory_order_acquire))
+         {
+            auto* envelope = m_queue.flushAll();
+
+            if (envelope == nullptr)
+            {
+               onIdle();
+               continue;
+            }
+
+            while (envelope != nullptr)
+            {
+               processElement(envelope);
+
+               auto* next = envelope->getNext();
+               envelope->recycle();
+               envelope = next;
+            }
+
+            afterBatch();
+         }
+      }
+
+      /** Interrupts the "infinite" event loop
+       */
+      void interrupt()
+      {
+         m_done.store(true, std::memory_order_release);
+      }
+
+      Processor(const Processor& other) = delete;
+      Processor& operator=(const Processor& other) = delete;
+
+      Processor(Processor&& other) = delete;
+      Processor& operator=(Processor&& other) = delete;
+
+      virtual ~Processor() = default;
+
+   private:
+      Queue&            m_queue;
+      std::atomic<bool> m_done{false};
+   };
+
 private:
    std::atomic<Envelope*> m_head{nullptr};
 };
@@ -182,8 +267,6 @@ private:
 template <typename Payload>
 class MessagePool
 {
-   using Envelope = Queue::Envelope;
-
 public:
    /** Aggregation of a payload and an envelope
     *
@@ -192,7 +275,7 @@ public:
    struct Message
    {
       /// The envelope
-      Envelope envelope;
+      Queue::Envelope envelope;
 
       /// The payload
       Payload payload;
@@ -260,100 +343,15 @@ private:
    /** Holds the atomically synchronized pool where processors are returning
     * objects
     */
-   std::atomic<Envelope*> m_recyclePool;
+   std::atomic<Queue::Envelope*> m_recyclePool;
 
    /** Holds the objects that are next in line for allocations
     */
-   Envelope* m_readyPool = nullptr;
+   Queue::Envelope* m_readyPool = nullptr;
 
    /** Holds the objects
     */
    std::pmr::list<std::pmr::vector<Message>> m_objectPool;
-};
-
-/** Base class encapsulating the event loop of a consumer or processor
- */
-class ProcessorBase
-{
-public:
-   /** Constructs a processor that consumes elements from a queue
-    *
-    * @param queue Is the queue from which elements are consumed
-    */
-   explicit ProcessorBase(Queue& queue) : m_queue(queue)
-   {
-   }
-
-   /** Called for each element popped from the queue
-    *
-    * @param envelope Points to the element to be processed
-    * @return nothing
-    */
-   virtual void processElement(Queue::Envelope* envelope) = 0;
-
-   /** Called after each batch of elements is processed
-    *
-    * @return nothing
-    */
-   virtual void afterBatch()
-   {
-      // do nothing
-   }
-
-   /** Called when a new batch was requested, but no new elements were available
-    *
-    * @return nothing
-    */
-   virtual void onIdle()
-   {
-      // do nothing
-   }
-
-   /** Begin the "infinite" event loop
-    */
-   void startProcessing()
-   {
-      while (!m_done.load(std::memory_order_acquire))
-      {
-         auto* envelope = m_queue.flushAll();
-
-         if (envelope == nullptr)
-         {
-            onIdle();
-            continue;
-         }
-
-         while (envelope != nullptr)
-         {
-            processElement(envelope);
-
-            auto* next = envelope->getNext();
-            envelope->recycle();
-            envelope = next;
-         }
-
-         afterBatch();
-      }
-   }
-
-   /** Interrupts the "infinite" event loop
-    */
-   void interrupt()
-   {
-      m_done.store(true, std::memory_order_release);
-   }
-
-   ProcessorBase(const ProcessorBase& other) = delete;
-   ProcessorBase& operator=(const ProcessorBase& other) = delete;
-
-   ProcessorBase(ProcessorBase&& other) = delete;
-   ProcessorBase& operator=(ProcessorBase&& other) = delete;
-
-   virtual ~ProcessorBase() = default;
-
-private:
-   Queue&            m_queue;
-   std::atomic<bool> m_done{false};
 };
 
 /** Strongly-typed consumer
@@ -363,14 +361,14 @@ private:
  * @tparam Payload Is the type of the useful payload processed via the queue
  */
 template <typename Payload>
-class Processor : public ProcessorBase
+class Processor : public Queue::Processor
 {
 public:
    /** Constructs a processor
     *
     * @param queue Is the queue from which elements are consumed
     */
-   explicit Processor(Queue& queue) : ProcessorBase(queue)
+   explicit Processor(Queue& queue) : Queue::Processor(queue)
    {
    }
 
