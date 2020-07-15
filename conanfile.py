@@ -15,7 +15,8 @@ class MCSC(ConanFile):
 
     def requirements(self):
         self.requires("gtest/1.10.0")
-        self.requires("fmt/7.0.1")
+        self.requires("spdlog/1.6.1")
+        self.requires("fmt/6.2.0")
 
     def build(self):
         cmake = CMake(self)
