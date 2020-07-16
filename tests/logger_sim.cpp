@@ -20,6 +20,7 @@
 
 #include <sbit/mpscq.h>
 
+#include <fmt/chrono.h>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 
@@ -38,7 +39,7 @@ namespace
 
 const auto performWrites          = true;
 const auto processorIdlePeriod    = 0ms;
-const auto generatorCoolOffPeriod = 32ms;
+const auto generatorCoolOffPeriod = 1ms;
 
 struct LogEntry
 {
@@ -65,10 +66,10 @@ protected:
    void process(const LogEntry& entry) override
    {
       ++m_messageCount;
-      const std::string_view text{entry.message.data(), entry.messageLength};
       if (performWrites)
       {
-         m_os << entry.timestamp << ':' << entry.source << ':' << text << '\n';
+         const std::string_view text{entry.message.data(), entry.messageLength};
+         m_os << text << '\n';
       }
    }
 
@@ -99,7 +100,7 @@ void producerThread(std::atomic<bool>& done, sbit::mpscq::Queue& queue)
    std::vector<char>                   dataBucket(/* __n = */ 16384, /* __v = */ 0);
    std::pmr::monotonic_buffer_resource resource{
       dataBucket.data(), dataBucket.size(), std::pmr::null_memory_resource()};
-   sbit::mpscq::MessagePool<LogEntry> pool{8, &resource};
+   sbit::mpscq::MessagePool<LogEntry> pool{32, &resource};
 
    const std::string threadId = fmt::format("Thread-{}", std::this_thread::get_id());
 
@@ -115,38 +116,56 @@ void producerThread(std::atomic<bool>& done, sbit::mpscq::Queue& queue)
    std::mt19937                            gen(seed);
    std::uniform_int_distribution<unsigned> distrib(0, 1024);
 
-   size_t poolExhausted   = 0;
-   size_t messgeAvailable = 0;
+   size_t poolExhausted    = 0;
+   size_t messageAvailable = 0;
 
    while (!done.load(std::memory_order_acquire))
    {
-      auto msg = pool.allocate();
+      auto* msg = pool.allocate();
       if (msg == nullptr)
       {
          // pool exhausted
-         std::this_thread::sleep_for(generatorCoolOffPeriod);
+         if (generatorCoolOffPeriod.count() > 0)
+         {
+            std::this_thread::sleep_for(generatorCoolOffPeriod);
+         }
+         else
+         {
+            std::this_thread::yield();
+         }
          poolExhausted++;
          continue;
       }
 
-      messgeAvailable++;
+      messageAvailable++;
 
-      const std::chrono::time_point<std::chrono::system_clock> now      = std::chrono::system_clock::now();
-      const auto                                               duration = now.time_since_epoch();
+      std::time_t now = std::time(nullptr);
+      std::tm     tm  = *std::localtime(&now);
 
-      msg->payload.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+      msg->payload.timestamp = now;
       msg->payload.source    = threadId;
 
       const unsigned value = distrib(gen);
 
-      const auto len =
-         fmt::format_to_n(msg->payload.message.data(), msg->payload.message.size(), "The lucky number is {}", value);
+      const std::string_view sinkName{"basic_logger"};
+      const std::string_view level{"info"};
+
+      const auto len = fmt::format_to_n(msg->payload.message.data(),
+                                        msg->payload.message.size(),
+                                        "[{:%Y-%m-%d %H:%M:%S}] [{}] [{}] {}:{}:The lucky number is {}",
+                                        tm,
+                                        sinkName,
+                                        level,
+                                        msg->payload.timestamp,
+                                        threadId,
+                                        value);
+
       msg->payload.messageLength = len.size;
 
       queue.append(&msg->envelope);
    }
 
-   fmt::print("For {}, message available: {}, pool exhausted {}\n", threadId, messgeAvailable, poolExhausted);
+   fmt::print("For {}, message available: {}, pool exhausted {}\n", threadId, messageAvailable, poolExhausted);
 }
 
 } // anonymous namespace
