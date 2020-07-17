@@ -54,13 +54,14 @@ public:
    class Envelope
    {
    public:
-      /** Chains the next envelope to this one
-       *
-       * @param next Is the next envelope in the unsynchronized list
+      /** Initializes the fields for this envelope
        */
-      void setNext(Envelope* next) noexcept
+      void initialize(Envelope* next, std::atomic<Envelope*>* returnMailbox, void* payload) noexcept
       {
-         m_next = next;
+         m_next          = next;
+         m_returnMailbox = returnMailbox;
+         m_payload       = payload;
+         m_status        = nullptr;
       }
 
       /** @return the next element in the free list
@@ -74,18 +75,16 @@ public:
        *
        * @param poolMailbox Points to the mailbox for the pool
        */
-      void setWorkerPool(std::atomic<Envelope*>* poolMailbox)
+      void setWorkerPool(std::atomic<Envelope*>* poolMailbox) noexcept
       {
-         m_workerPool = poolMailbox;
+         m_returnMailbox = poolMailbox;
       }
 
-      /** Sets the pool that physically owns this envelope
-       *
-       * @param poolMailbox Points to the mailbox for the pool
+      /** Sets the optional status pointer
        */
-      void setOwnerPool(std::atomic<Envelope*>* poolMailbox)
+      void setStatusPointer(std::atomic<uintptr_t>* status) noexcept
       {
-         m_ownerPool = poolMailbox;
+         m_status = status;
       }
 
       /** Atomically appends this element to the specified queue
@@ -107,14 +106,19 @@ public:
        */
       void recycle() noexcept
       {
-         appendTo(m_workerPool);
+         appendTo(m_returnMailbox);
       }
 
-      /** Releases this element by returning it to its owner pool
+      /** Indicates the operation was complete and returns a status to submitter
        */
-      void release() noexcept
+      void complete(uintptr_t status) noexcept
       {
-         appendTo(m_ownerPool);
+         if (m_status != nullptr)
+         {
+            m_status->store(status, std::memory_order_release);
+            m_status = nullptr;
+         }
+         recycle();
       }
 
       /** Sets the payload for this message
@@ -138,13 +142,13 @@ public:
       Envelope* m_next;
 
       /// Where to return the object after the message is processed
-      std::atomic<Envelope*>* m_workerPool;
-
-      /// Where to return the object when the worker is shut down
-      std::atomic<Envelope*>* m_ownerPool;
+      std::atomic<Envelope*>* m_returnMailbox;
 
       /// The payload wrapped in this envelope
       void* m_payload;
+
+      /// Optional status location
+      std::atomic<uintptr_t>* m_status = nullptr;
    };
 
    /** Appends this object to the queue
@@ -218,6 +222,7 @@ public:
             if (envelope == nullptr)
             {
                onIdle();
+               ++m_idleCount;
                continue;
             }
 
@@ -231,14 +236,25 @@ public:
             }
 
             afterBatch();
+            ++m_batchCount;
          }
       }
 
       /** Interrupts the "infinite" event loop
        */
-      void interrupt()
+      void interrupt() noexcept
       {
          m_done.store(true, std::memory_order_release);
+      }
+
+      size_t getBatchCount() const noexcept
+      {
+         return m_batchCount;
+      }
+
+      size_t getIdleCount() const noexcept
+      {
+         return m_idleCount;
       }
 
       Processor(const Processor& other) = delete;
@@ -252,6 +268,9 @@ public:
    private:
       Queue&            m_queue;
       std::atomic<bool> m_done{false};
+
+      size_t m_idleCount{0};
+      size_t m_batchCount{0};
    };
 
 private:
@@ -319,11 +338,8 @@ public:
                std::pmr::vector<Message>{m_allocationGroupSize, m_objectPool.get_allocator()});
             for (auto& msg : elems)
             {
-               msg.envelope.setNext(m_readyPool);
+               msg.envelope.initialize(m_readyPool, &m_recyclePool, &msg.payload);
                m_readyPool = &msg.envelope;
-               msg.envelope.setWorkerPool(&m_recyclePool);
-               msg.envelope.setOwnerPool(&m_recyclePool);
-               msg.envelope.setPayload(&msg.payload);
             }
          }
          catch (...)
@@ -352,6 +368,112 @@ private:
    /** Holds the objects
     */
    std::pmr::list<std::pmr::vector<Message>> m_objectPool;
+};
+
+/** Efficient object pool for messages
+ *
+ * Allocates objects in batches, using the passed-in memory resource. If the
+ * memory resource is exhausted, it reaches out to an optional upstream pool
+ * to borrow some messages.
+ *
+ * @tparam Payload Is the type of the useful payload processed via the queue
+ */
+template <typename Payload>
+class MultilevelMessagePool
+{
+public:
+   /** Aggregation of a payload and an envelope
+    *
+    * @tparam Payload Is the type of the useful payload processed via the queue
+    */
+   struct Message
+   {
+      /// The envelope
+      Queue::Envelope envelope;
+
+      /// The payload
+      Payload payload;
+
+      /// The pool that physically allocated this message
+      std::atomic<Queue::Envelope*>* m_ownerPool;
+
+      /** Recycles this element by returning it to its worker pool
+       */
+      void recycle()
+      {
+         envelope.recycle();
+      }
+   };
+
+   /** Constructs a message pool
+    *
+    * @param allocationGroupSize Specifies how many objects to allocate at once
+    * @param memoryResource Indicates the memory resource backing the allocations
+    * @param upstreamPool An optional upstream pool from which we can allocate
+    */
+   MultilevelMessagePool(size_t                          allocationGroupSize,
+                         std::pmr::memory_resource*      memoryResource,
+                         MultilevelMessagePool<Payload>* upstreamPool) :
+      m_allocationGroupSize{allocationGroupSize},
+      m_recyclePool{nullptr},
+      m_objectPool{allocationGroupSize, memoryResource},
+      m_upstreamPool{upstreamPool}
+   {
+   }
+
+   /** Allocates a message
+    *
+    * @return a pointer to the message
+    */
+   Message* allocate()
+   {
+      if (m_readyPool == nullptr)
+      {
+         m_readyPool = std::atomic_exchange_explicit(&m_recyclePool, nullptr, std::memory_order_release);
+      }
+
+      if (m_readyPool == nullptr)
+      {
+         try
+         {
+            auto& elems = m_objectPool.emplace_back(
+               std::pmr::vector<Message>{m_allocationGroupSize, m_objectPool.get_allocator()});
+            for (auto& msg : elems)
+            {
+               msg.envelope.initialize(m_readyPool, &m_recyclePool, &msg.payload);
+               m_readyPool     = &msg.envelope;
+               msg.m_ownerPool = &m_recyclePool;
+            }
+         }
+         catch (...)
+         {
+            // TODO: borrow from upstream
+            return nullptr;
+         }
+      }
+
+      auto* msg   = reinterpret_cast<Message*>(m_readyPool);
+      m_readyPool = m_readyPool->getNext();
+      return msg;
+   }
+
+private:
+   const size_t m_allocationGroupSize;
+
+   /** Holds the atomically synchronized pool where processors are returning
+    * objects
+    */
+   std::atomic<Queue::Envelope*> m_recyclePool;
+
+   /** Holds the objects that are next in line for allocations
+    */
+   Queue::Envelope* m_readyPool = nullptr;
+
+   /** Holds the objects
+    */
+   std::pmr::list<std::pmr::vector<Message>> m_objectPool;
+
+   MultilevelMessagePool<Payload>* m_upstreamPool;
 };
 
 /** Strongly-typed consumer
