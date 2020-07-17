@@ -43,7 +43,7 @@ public:
    {
       for (size_t ii = 0; ii < count; ++ii)
       {
-         auto msg           = m_pool.allocate();
+         auto* msg          = m_pool.allocate();
          msg->payload.value = ii;
          queue.append(&msg->envelope);
       }
@@ -54,7 +54,7 @@ private:
 
    std::pmr::monotonic_buffer_resource m_resource{m_dataBucket.data(), m_dataBucket.size()};
 
-   sbit::mpscq::MessagePool<Data> m_pool{8, &m_resource};
+   sbit::mpscq::MessagePool<Data> m_pool{8, 16, &m_resource};
 };
 
 class Receiver

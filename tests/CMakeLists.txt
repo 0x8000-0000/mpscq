@@ -26,7 +26,7 @@ target_link_libraries (logger_sim PUBLIC project_warnings)
 target_link_libraries (logger_sim PUBLIC CONAN_PKG::fmt)
 target_link_libraries (logger_sim PUBLIC PRIVATE Threads::Threads)
 
-add_executable (logger_sim_stdio logger_sim.cpp)
+add_executable (logger_sim_stdio logger_sim_stdio.cpp)
 
 target_link_libraries (logger_sim_stdio PUBLIC sbit_mpscq)
 target_link_libraries (logger_sim_stdio PUBLIC project_warnings)

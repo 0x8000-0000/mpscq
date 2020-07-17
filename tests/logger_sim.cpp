@@ -37,9 +37,13 @@ using namespace std::chrono_literals;
 namespace
 {
 
-const auto performWrites          = true;
-const auto processorIdlePeriod    = 0ms;
-const auto generatorCoolOffPeriod = 1ms;
+const auto k_generatorSpinCount     = 16;
+const auto k_generatorCoolOffPeriod = 1ms;
+
+const auto performWrites = true;
+
+const auto k_processorSpinCount  = 16;
+const auto k_processorIdlePeriod = 1ms;
 
 struct LogEntry
 {
@@ -62,6 +66,11 @@ public:
       m_os << "Observed " << m_messageCount << " messages.\n";
    }
 
+   size_t getSleepCycles() const noexcept
+   {
+      return m_sleepCycles;
+   }
+
 protected:
    void process(const LogEntry& entry) override
    {
@@ -75,9 +84,17 @@ protected:
 
    void onIdle() override
    {
-      if (processorIdlePeriod.count() > 0)
+      if (--m_idleSpinCount > 0)
       {
-         std::this_thread::sleep_for(processorIdlePeriod);
+         return;
+      }
+      m_idleSpinCount = k_processorSpinCount;
+
+      ++m_sleepCycles;
+
+      if (k_processorIdlePeriod.count() > 0)
+      {
+         std::this_thread::sleep_for(k_processorIdlePeriod);
       }
       else
       {
@@ -88,6 +105,9 @@ protected:
 private:
    std::ostream& m_os;
    size_t        m_messageCount;
+
+   int    m_idleSpinCount{k_processorSpinCount};
+   size_t m_sleepCycles{0};
 };
 
 void consumerThread(LoggerSink& sink)
@@ -100,7 +120,7 @@ void producerThread(std::atomic<bool>& done, sbit::mpscq::Queue& queue)
    std::vector<char>                   dataBucket(/* __n = */ 16384, /* __v = */ 0);
    std::pmr::monotonic_buffer_resource resource{
       dataBucket.data(), dataBucket.size(), std::pmr::null_memory_resource()};
-   sbit::mpscq::MessagePool<LogEntry> pool{32, &resource};
+   sbit::mpscq::MessagePool<LogEntry> pool{16, 64, &resource};
 
    const std::string threadId = fmt::format("Thread-{}", std::this_thread::get_id());
 
@@ -121,13 +141,21 @@ void producerThread(std::atomic<bool>& done, sbit::mpscq::Queue& queue)
 
    while (!done.load(std::memory_order_acquire))
    {
-      auto* msg = pool.allocate();
+      int   spinCount = k_generatorSpinCount;
+      auto* msg       = pool.allocate();
+
+      while ((spinCount > 0) && (msg == nullptr))
+      {
+         msg = pool.allocate();
+         --spinCount;
+      }
+
       if (msg == nullptr)
       {
          // pool exhausted
-         if (generatorCoolOffPeriod.count() > 0)
+         if (k_generatorCoolOffPeriod.count() > 0)
          {
-            std::this_thread::sleep_for(generatorCoolOffPeriod);
+            std::this_thread::sleep_for(k_generatorCoolOffPeriod);
          }
          else
          {
@@ -220,6 +248,10 @@ int main(int argc, char* argv[])
       tt.join();
    }
 
+   fmt::print("Sink: batch count: {}   idle: {}  sleep: {}\n",
+              sink.getBatchCount(),
+              sink.getIdleCount(),
+              sink.getSleepCycles());
    fmt::print("Test complete.\n");
 
    return 0;

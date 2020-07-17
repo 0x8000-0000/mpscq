@@ -312,9 +312,9 @@ public:
     * @param allocationGroupSize Specifies how many objects to allocate at once
     * @param memoryResource Indicates the memory resource backing the allocations
     */
-   MessagePool(size_t allocationGroupSize, std::pmr::memory_resource* memoryResource) :
+   MessagePool(size_t allocationGroupSize, size_t maxPoolSize, std::pmr::memory_resource* memoryResource) :
       m_allocationGroupSize{allocationGroupSize},
-      m_recyclePool{nullptr},
+      m_maxPoolSize{maxPoolSize},
       m_objectPool{allocationGroupSize, memoryResource}
    {
    }
@@ -327,22 +327,33 @@ public:
    {
       if (m_readyPool == nullptr)
       {
+         ++m_readyPoolExhausted;
          m_readyPool = std::atomic_exchange_explicit(&m_recyclePool, nullptr, std::memory_order_release);
       }
 
       if (m_readyPool == nullptr)
       {
-         try
+         ++m_recyclePoolEmpty;
+
+         if (m_poolSize < m_maxPoolSize)
          {
-            auto& elems = m_objectPool.emplace_back(
-               std::pmr::vector<Message>{m_allocationGroupSize, m_objectPool.get_allocator()});
-            for (auto& msg : elems)
+            try
             {
-               msg.envelope.initialize(m_readyPool, &m_recyclePool, &msg.payload);
-               m_readyPool = &msg.envelope;
+               auto& elems = m_objectPool.emplace_back(
+                  std::pmr::vector<Message>{m_allocationGroupSize, m_objectPool.get_allocator()});
+               for (auto& msg : elems)
+               {
+                  msg.envelope.initialize(m_readyPool, &m_recyclePool, &msg.payload);
+                  m_readyPool = &msg.envelope;
+               }
             }
+            catch (...)
+            {
+               return nullptr;
+            }
+            m_poolSize += m_allocationGroupSize;
          }
-         catch (...)
+         else
          {
             return nullptr;
          }
@@ -356,18 +367,26 @@ public:
 private:
    const size_t m_allocationGroupSize;
 
+   const size_t m_maxPoolSize;
+
+   size_t m_poolSize{0};
+
    /** Holds the atomically synchronized pool where processors are returning
     * objects
     */
-   std::atomic<Queue::Envelope*> m_recyclePool;
+   std::atomic<Queue::Envelope*> m_recyclePool{nullptr};
 
    /** Holds the objects that are next in line for allocations
     */
-   Queue::Envelope* m_readyPool = nullptr;
+   Queue::Envelope* m_readyPool{nullptr};
 
    /** Holds the objects
     */
    std::pmr::list<std::pmr::vector<Message>> m_objectPool;
+
+   size_t m_readyPoolExhausted{0};
+
+   size_t m_recyclePoolEmpty{0};
 };
 
 /** Efficient object pool for messages

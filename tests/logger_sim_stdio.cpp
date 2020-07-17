@@ -100,7 +100,7 @@ void producerThread(std::atomic<bool>& done, sbit::mpscq::Queue& queue)
    std::vector<char>                   dataBucket(/* __n = */ 65536, /* __v = */ 0);
    std::pmr::monotonic_buffer_resource resource{
       dataBucket.data(), dataBucket.size(), std::pmr::null_memory_resource()};
-   sbit::mpscq::MessagePool<LogEntry> pool{64, &resource};
+   sbit::mpscq::MessagePool<LogEntry> pool{16, 64, &resource};
 
    const std::string threadId = fmt::format("Thread-{}", std::this_thread::get_id());
 
