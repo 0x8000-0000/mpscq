@@ -1,0 +1,30 @@
+AMD Ryzen 7 2700X Eight-Core Processor
+Samsung Electronics Co Ltd NVMe SSD Controller SM981/PM981/PM983
+
+Total messages delivered in 30 seconds
+
+   Running the tests/perf_script.sh tool, writing on NVMe:
+
+                        spdlog                     mpscq
+                        mean         max           mean         max
+      4 threads      49119045    53176159       84570249    86842444
+      8 threads      39212531    41460716       76066459    78692166
+     12 threads      35267042    35479455       71979644    72207239
+
+Per-thread averages of messages delivered in 30 seconds, computed with:
+awk '/Thread/ {n++;sum+=$3} END {print n?sum/n:0}'
+
+   Writing to file on NVMe
+
+                           spdlog                mpscq
+      4 threads       1.22798e+07           2.11426e+07           1.721x
+      8 threads       4.90157e+06           9.50832e+06           1.939x
+      12 threads      2.93892e+06           5.99831e+06           2.040x
+
+   Writing to /dev/null
+
+                           spdlog                mpscq
+      4 threads        1.63879e+07          2.12409e+07           1.296x
+      8 threads        6.63702e+06          9.37717e+06           1.412x
+      12 threads       4.19601e+06          5.9742e+06            1.423x
+   

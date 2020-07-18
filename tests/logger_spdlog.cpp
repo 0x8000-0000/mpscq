@@ -52,8 +52,7 @@ void producerThread(std::atomic<bool>& done)
    std::mt19937                            gen(seed);
    std::uniform_int_distribution<unsigned> distrib(0, 1024);
 
-   size_t poolExhausted   = 0;
-   size_t messgeAvailable = 0;
+   size_t messagesSent = 0;
 
    while (!done.load(std::memory_order_acquire))
    {
@@ -69,9 +68,11 @@ void producerThread(std::atomic<bool>& done)
                       threadId,
                       value);
       }
+
+      ++ messagesSent;
    }
 
-   fmt::print("For {}, message available: {}, pool exhausted {}\n", threadId, messgeAvailable, poolExhausted);
+   fmt::print("{} sent {} messages\n", threadId, messagesSent);
 }
 
 } // anonymous namespace

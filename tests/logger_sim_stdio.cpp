@@ -39,15 +39,14 @@ namespace
 
 const auto performWrites          = true;
 const auto processorIdlePeriod    = 0ms;
-const auto generatorCoolOffPeriod = 250us;
+const auto generatorCoolOffPeriod = 500us;
 
 struct LogEntry
 {
    uint64_t         timestamp;
    std::string_view source;
 
-   size_t                messageLength;
-   std::array<char, 256> message;
+   fmt::memory_buffer message;
 };
 
 class LoggerSink final : public sbit::mpscq::Processor<LogEntry>
@@ -57,9 +56,9 @@ public:
    {
    }
 
-   virtual ~LoggerSink()
+   ~LoggerSink() override
    {
-      std::fprintf(m_fp, "Observed %zu messages.\n", m_messageCount);
+      fmt::print("Observed {} messages.\n", m_messageCount);
    }
 
 protected:
@@ -68,7 +67,7 @@ protected:
       ++m_messageCount;
       if (performWrites)
       {
-         std::fwrite(entry.message.data(), 1, entry.messageLength, m_fp);
+         std::fwrite(entry.message.data(), 1, entry.message.size(), m_fp);
          std::fputc('\n', m_fp);
       }
    }
@@ -100,24 +99,18 @@ void producerThread(std::atomic<bool>& done, sbit::mpscq::Queue& queue)
    std::vector<char>                   dataBucket(/* __n = */ 65536, /* __v = */ 0);
    std::pmr::monotonic_buffer_resource resource{
       dataBucket.data(), dataBucket.size(), std::pmr::null_memory_resource()};
-   sbit::mpscq::MessagePool<LogEntry> pool{16, 64, &resource};
+   sbit::mpscq::MessagePool<LogEntry> pool{32, 64, &resource};
 
    const std::string threadId = fmt::format("Thread-{}", std::this_thread::get_id());
 
-   std::random_device        rd;
-   std::mt19937::result_type seed =
-      rd() ^ ((std::mt19937::result_type)std::chrono::duration_cast<std::chrono::seconds>(
-                 std::chrono::system_clock::now().time_since_epoch())
-                 .count() +
-              (std::mt19937::result_type)std::chrono::duration_cast<std::chrono::microseconds>(
-                 std::chrono::high_resolution_clock::now().time_since_epoch())
-                 .count());
-
+   std::random_device                      rd;
+   std::mt19937::result_type               seed = 42U;
    std::mt19937                            gen(seed);
    std::uniform_int_distribution<unsigned> distrib(0, 1024);
 
    size_t poolExhausted    = 0;
    size_t messageAvailable = 0;
+   size_t messagesSent     = 0;
 
    while (!done.load(std::memory_order_acquire))
    {
@@ -140,7 +133,8 @@ void producerThread(std::atomic<bool>& done, sbit::mpscq::Queue& queue)
       messageAvailable++;
 
       std::time_t now = std::time(nullptr);
-      std::tm     tm  = *std::localtime(&now);
+      struct tm   tm;
+      localtime_r(&now, &tm);
 
       msg->payload.timestamp = now;
       msg->payload.source    = threadId;
@@ -150,22 +144,23 @@ void producerThread(std::atomic<bool>& done, sbit::mpscq::Queue& queue)
       const std::string_view sinkName{"basic_logger"};
       const std::string_view level{"info"};
 
-      const auto len = fmt::format_to_n(msg->payload.message.data(),
-                                        msg->payload.message.size(),
-                                        "[{:%Y-%m-%d %H:%M:%S}] [{}] [{}] {}:{}:The lucky number is {}",
-                                        tm,
-                                        sinkName,
-                                        level,
-                                        msg->payload.timestamp,
-                                        threadId,
-                                        value);
-
-      msg->payload.messageLength = len.size;
+      msg->payload.message.clear();
+      fmt::format_to(msg->payload.message,
+                     "[{:%Y-%m-%d %H:%M:%S}] [{}] [{}] {}:{}:The lucky number is {}",
+                     tm,
+                     sinkName,
+                     level,
+                     msg->payload.timestamp,
+                     threadId,
+                     value);
 
       queue.append(&msg->envelope);
+
+      ++messagesSent;
    }
 
-   fmt::print("For {}, message available: {}, pool exhausted {}\n", threadId, messageAvailable, poolExhausted);
+   // fmt::print("For {}, message available: {}, pool exhausted {}\n", threadId, messageAvailable, poolExhausted);
+   fmt::print("{} sent {} messages\n", threadId, messagesSent);
 }
 
 } // anonymous namespace
@@ -187,7 +182,7 @@ int main(int argc, char* argv[])
 
    sbit::mpscq::Queue queue;
 
-   FILE*       out = fopen(argv[2], "wb");
+   FILE* out = fopen(argv[2], "wb");
    {
       LoggerSink  sink{queue, out};
       std::thread sinkThread{consumerThread, std::ref(sink)};
@@ -213,9 +208,10 @@ int main(int argc, char* argv[])
       fmt::print("Stimulus complete. Shutting down...\n");
 
       sink.interrupt();
+      sinkThread.join();
+
       doneFlag.store(true, std::memory_order_release);
 
-      sinkThread.join();
       for (auto& tt : producerThreads)
       {
          tt.join();

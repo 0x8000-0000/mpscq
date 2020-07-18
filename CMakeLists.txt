@@ -30,6 +30,7 @@ include (GoogleTest)
 enable_testing ()
 
 add_subdirectory (tests)
+configure_file (tests/perf_script.sh ${CMAKE_BINARY_DIR})
 
 #
 # Documentation

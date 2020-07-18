@@ -55,6 +55,10 @@ public:
    {
    public:
       /** Initializes the fields for this envelope
+       *
+       * @param next Points to the next envelope in the free list
+       * @param returnMailbox Points to the return mailbox
+       * @param payload Points to the payload
        */
       void initialize(Envelope* next, std::atomic<Envelope*>* returnMailbox, void* payload) noexcept
       {
@@ -81,6 +85,8 @@ public:
       }
 
       /** Sets the optional status pointer
+       *
+       * @param status Points to the location where the status will written
        */
       void setStatusPointer(std::atomic<uintptr_t>* status) noexcept
       {
@@ -110,6 +116,8 @@ public:
       }
 
       /** Indicates the operation was complete and returns a status to submitter
+       *
+       * @param status Is the result of the operation
        */
       void complete(uintptr_t status) noexcept
       {
@@ -247,11 +255,15 @@ public:
          m_done.store(true, std::memory_order_release);
       }
 
+      /** @return The number of successful batch retrieval
+       */
       size_t getBatchCount() const noexcept
       {
          return m_batchCount;
       }
 
+      /** @return The number of time the processor has been idle
+       */
       size_t getIdleCount() const noexcept
       {
          return m_idleCount;
@@ -310,6 +322,7 @@ public:
    /** Constructs a message pool
     *
     * @param allocationGroupSize Specifies how many objects to allocate at once
+    * @param maxPoolSize Specifies how many objects to allocate in total
     * @param memoryResource Indicates the memory resource backing the allocations
     */
    MessagePool(size_t allocationGroupSize, size_t maxPoolSize, std::pmr::memory_resource* memoryResource) :

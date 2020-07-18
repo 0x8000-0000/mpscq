@@ -240,9 +240,10 @@ int main(int argc, char* argv[])
    fmt::print("Stimulus complete. Shutting down...\n");
 
    sink.interrupt();
+   sinkThread.join();
+
    doneFlag.store(true, std::memory_order_release);
 
-   sinkThread.join();
    for (auto& tt : producerThreads)
    {
       tt.join();
