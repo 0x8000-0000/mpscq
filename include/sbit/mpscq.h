@@ -75,6 +75,15 @@ public:
          return m_next;
       }
 
+      /** Makes this the head of a new list
+       *
+       * @param next Is the new tail
+       */
+      void setNext(Envelope* next) noexcept
+      {
+         m_next = next;
+      }
+
       /** Sets the worker pool that currently owns this envelope
        *
        * @param poolMailbox Points to the mailbox for the pool
@@ -176,9 +185,25 @@ public:
    {
       Envelope* values = std::atomic_exchange_explicit(&m_head, nullptr, std::memory_order_release);
 
-      // TODO(florin): reverse the links so we return a pointer to the oldest element
+      if (values == nullptr)
+      {
+         return nullptr;
+      }
 
-      return values;
+      /*
+       * reverse the links so we return a pointer to the oldest element
+       */
+      Envelope* reversed = nullptr;
+
+      while (values != nullptr)
+      {
+         Envelope* next = values->getNext();
+         values->setNext(reversed);
+         reversed = values;
+         values   = next;
+      }
+
+      return reversed;
    }
 
    /** Base class encapsulating the event loop of a consumer or processor
