@@ -14,9 +14,9 @@ class MCSC(ConanFile):
     generators = "cmake"
 
     def requirements(self):
-        self.requires("gtest/1.10.0")
-        self.requires("spdlog/1.6.1")
-        self.requires("fmt/6.2.0")
+        self.requires("gtest/cci.20210126")
+        self.requires("spdlog/1.8.5")
+        self.requires("fmt/7.1.3")
 
     def build(self):
         cmake = CMake(self)

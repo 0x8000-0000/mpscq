@@ -222,13 +222,10 @@ public:
       /** Called for each element popped from the queue
        *
        * @param envelope Points to the element to be processed
-       * @return nothing
        */
       virtual void processElement(Queue::Envelope* envelope) = 0;
 
       /** Called after each batch of elements is processed
-       *
-       * @return nothing
        */
       virtual void afterBatch()
       {
@@ -236,8 +233,6 @@ public:
       }
 
       /** Called when a new batch was requested, but no new elements were available
-       *
-       * @return nothing
        */
       virtual void onIdle()
       {
@@ -555,7 +550,6 @@ protected:
    /** Process a message
     *
     * @param payload Is the message contents to be processed
-    * @return nothing
     */
    virtual void process(const Payload& payload) = 0;
 
