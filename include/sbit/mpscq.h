@@ -156,7 +156,7 @@ public:
 
    private:
       /// Next element in the queue
-      Envelope* m_next;
+      Envelope* m_next; // NOLINT(cppcoreguidelines-pro-type-member-init)
 
       /// Where to return the object after the message is processed
       std::atomic<Envelope*>* m_returnMailbox;
@@ -447,7 +447,7 @@ public:
       Payload payload;
 
       /// The pool that physically allocated this message
-      std::atomic<Queue::Envelope*>* m_ownerPool;
+      std::atomic<Queue::Envelope*>* m_ownerPool;  // NOLINT(cppcoreguidelines-pro-type-member-init)
 
       /** Recycles this element by returning it to its worker pool
        */
@@ -499,7 +499,7 @@ public:
          }
          catch (...)
          {
-            // TODO: borrow from upstream
+            // TODO(florin): borrow from upstream
             return nullptr;
          }
       }

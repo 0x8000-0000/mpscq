@@ -1,5 +1,5 @@
 ---
-Checks:          'clang-diagnostic-*,clang-analyzer-*,*,-modernize-use-trailing-return-type,-fuchsia-default-arguments-calls,-llvm-header-guard,-cppcoreguidelines-pro-bounds-array-to-pointer-decay,-hicpp-no-array-decay,-fuchsia-overloaded-operator,-cppcoreguidelines-pro-bounds-pointer-arithmetic,-cppcoreguidelines-pro-type-reinterpret-cast,-fuchsia-default-arguments-declarations,-google-runtime-references,-modernize-use-nodiscard,-fuchsia-statically-constructed-objects,-cppcoreguidelines-pro-type-union-access'
+Checks:          'clang-diagnostic-*,clang-analyzer-*,*,-modernize-use-trailing-return-type,-fuchsia-default-arguments-calls,-llvm-header-guard,-cppcoreguidelines-pro-bounds-array-to-pointer-decay,-hicpp-no-array-decay,-fuchsia-overloaded-operator,-cppcoreguidelines-pro-bounds-pointer-arithmetic,-cppcoreguidelines-pro-type-reinterpret-cast,-fuchsia-default-arguments-declarations,-google-runtime-references,-modernize-use-nodiscard,-fuchsia-statically-constructed-objects,-cppcoreguidelines-pro-type-union-access,-llvmlibc-callee-namespace'
 WarningsAsErrors: '*'
 HeaderFilterRegex: ''
 AnalyzeTemporaryDtors: false
