@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16.3 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.18.3 FATAL_ERROR)
 
 project (sbit_mpscq VERSION 0.5.0 LANGUAGES CXX DESCRIPTION "Signbit MPSC Queue")
 
@@ -9,7 +9,7 @@ include (${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
 conan_basic_setup (TARGETS NO_OUTPUT_DIRS SKIP_STD)
 
 add_library (project_options INTERFACE)
-target_compile_features (project_options INTERFACE cxx_std_17)
+target_compile_features (project_options INTERFACE cxx_std_20)
 
 add_library (project_warnings INTERFACE)
 if (NOT MSVC)
